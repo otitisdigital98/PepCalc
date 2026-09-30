@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Peptide Dosing & Reconstitution Tracker</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        .toggle-checkbox:checked { right: 0; border-color: #2563eb; }
+        .toggle-checkbox:checked + .toggle-label { background-color: #2563eb; }
+        .toggle-checkbox { right: 4px; z-index: 1; border-color: #e2e8f0; transition: all 0.3s; }
+        .toggle-label { width: 2.5rem; height: 1.25rem; background-color: #cbd5e1; border-radius: 9999px; transition: all 0.3s; }
+        
+        .taken-row { background-color: #f8fafc; border-color: #e2e8f0; opacity: 0.85; }
+        .taken-text { text-decoration: line-through; color: #94a3b8; }
+    </style>
+</head>
+<body class="text-slate-800 antialiased p-4 md:p-8">
+
+    <div id="loadingScreen" class="fixed inset-0 bg-slate-50 z-50 flex flex-col items-center justify-center">
+        <i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-600 mb-4"></i>
+        <p class="text-slate-500 font-medium">Loading your secure data...</p>
+    </div>
+
+    <div id="appContent" class="max-w-6xl mx-auto space-y-6 hidden">
+        
+        <!-- Header -->
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 flex items-center gap-3">
+                    <div class="bg-blue-100 p-2 rounded-lg text-blue-600"><i class="fa-solid fa-vial-circle-check"></i></div>
+                    Peptide Supply & Dose Tracker
+                </h1>
+                <p class="text-slate-500 text-sm mt-2 flex items-center gap-2">
+                    <span id="saveStatus" class="text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded text-xs font-semibold flex items-center gap-1">
+                        <i class="fa-solid fa-cloud-check"></i> Cloud Synced
+                    </span>
+                    Data auto-saves to your account.
+                </p>
+            </div>
+            <button onclick="runCalculations()" class="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-semibold shadow-md transition-all flex items-center gap-2 text-sm whitespace-nowrap">
+                <i class="fa-solid fa-calculator"></i> Calculate Schedule
+            </button>
+        </div>
+
+        <div id="countdownWidget" class="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl shadow-sm border border-blue-700 p-6 text-white flex flex-col sm:flex-row items-center justify-between gap-4 hidden">
+            <div class="flex items-center gap-4">
+                <div class="bg-white/20 p-3 rounded-xl backdrop-blur-sm"><i class="fa-regular fa-clock text-2xl"></i></div>
+                <div>
+                    <h3 class="text-blue-100 font-medium text-sm">Next Scheduled Dose</h3>
+                    <div class="text-2xl font-black tracking-tight mt-0.5" id="cdStatus">Due in -- Days</div>
+                </div>
+            </div>
+            <div class="flex gap-4 text-right">
+                <div class="bg-white/10 px-4 py-2 rounded-lg border border-white/10">
+                    <div class="text-blue-200 text-xs font-semibold uppercase tracking-wide">Date</div>
+                    <div class="font-bold text-lg" id="cdDate">--</div>
+                </div>
+                <div class="bg-white/10 px-4 py-2 rounded-lg border border-white/10">
+                    <div class="text-blue-200 text-xs font-semibold uppercase tracking-wide">Dose</div>
+                    <div class="font-bold text-lg" id="cdDose">-- mg</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            <div class="lg:col-span-5 space-y-6">
+                
+                <!-- Inventory Card -->
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                    <div class="flex items-center justify-between mb-5">
+                        <h2 class="text-lg font-bold flex items-center gap-2 text-slate-800">
+                            <i class="fa-solid fa-boxes-stacked text-indigo-500"></i> Unopened Inventory
+                        </h2>
+                        <span class="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded font-medium border border-slate-200">Fridge Supply</span>
+                    </div>
+                    
+                    <div class="space-y-4">
+                        <!-- Medication -->
+                        <div class="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                            <div class="text-sm font-bold text-slate-700 mb-3 border-b border-slate-200 pb-2">Medication (Peptide)</div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-500 mb-1">Total mg per Vial</label>
+                                    <input type="number" id="medMg" class="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('medication', 'mg', this.value)">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-500 mb-1">Vials on Hand</label>
+                                    <input type="number" id="medVials" class="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('medication', 'vials', this.value)">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- BAC Water -->
+                        <div class="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                            <div class="text-sm font-bold text-slate-700 mb-3 border-b border-slate-200 pb-2">Reconstitution Agent (BAC Water)</div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-500 mb-1">Total ml per Bottle</label>
+                                    <input type="number" id="bacMl" class="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('agent', 'ml', this.value)">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-500 mb-1">Bottles on Hand</label>
+                                    <input type="number" id="bacVials" class="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('agent', 'vials', this.value)">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Hardware -->
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                <label class="block text-xs font-bold text-slate-700 mb-1">Cartridge Size (ml)</label>
+                                <input type="number" id="cartSize" class="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('hardware', 'cartridgeSize', this.value)">
+                            </div>
+                            <div class="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                <label class="block text-xs font-bold text-slate-700 mb-1">Cartridges on Hand</label>
+                                <input type="number" id="cartCount" class="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('hardware', 'cartridgeCount', this.value)">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Active Vial Card -->
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                    <div class="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+                        <h2 class="text-lg font-bold flex items-center gap-2 text-slate-800">
+                            <i class="fa-solid fa-flask text-teal-500"></i> Active Vial Setup
+                        </h2>
+                        <div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                            <input type="checkbox" name="toggle" id="activeVialToggle" class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer" onchange="updateState('activeVial', 'active', this.checked)"/>
+                            <label for="activeVialToggle" class="toggle-label block overflow-hidden h-5 rounded-full bg-gray-300 cursor-pointer"></label>
+                        </div>
+                    </div>
+                    
+                    <div id="activeVialForm" class="space-y-4 transition-all duration-300">
+                        <p class="text-xs text-slate-500 mb-2">Define your first/current mixed vial. The app will subtract your "Taken" schedule doses automatically to figure out what is left.</p>
+                        
+                        <div class="bg-teal-50 border border-teal-100 p-3 rounded-lg flex items-center justify-between mb-2">
+                            <span class="text-sm font-semibold text-teal-800">Medication Remaining:</span>
+                            <span class="text-lg font-black text-teal-700" id="computedRemaining">-- mg</span>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="col-span-2">
+                                <label class="block text-xs font-medium text-slate-500 mb-1">Date Mixed</label>
+                                <input type="date" id="avDate" class="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('activeVial', 'dateMixed', this.value)">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-500 mb-1">Starting Med (mg)</label>
+                                <input type="number" step="0.1" id="avMg" class="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('activeVial', 'mgTotal', this.value)">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-500 mb-1">BAC Used (ml)</label>
+                                <input type="number" step="0.1" id="avBac" class="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('activeVial', 'bacMl', this.value)">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Card -->
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                    <h2 class="text-lg font-bold flex items-center gap-2 mb-4 text-slate-800">
+                        <i class="fa-solid fa-gear text-slate-500"></i> Settings & Overrides
+                    </h2>
+                    
+                    <div class="space-y-4">
+                        <!-- Reconstitution Override -->
+                        <div class="bg-blue-50 p-4 rounded-xl border border-blue-100">
+                            <label class="block text-sm font-bold text-blue-900 mb-1">Reconstitution Override (ml)</label>
+                            <p class="text-xs text-blue-700 mb-3">Leave blank to let the app auto-calculate the optimal BAC ratio for future vials.</p>
+                            <div class="relative">
+                                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-blue-400"><i class="fa-solid fa-pen-to-square"></i></div>
+                                <input type="number" step="0.1" id="setBacOverride" placeholder="Auto" class="w-full pl-9 p-2.5 border border-blue-200 rounded-lg bg-white text-sm font-black text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('settings', 'bacOverride', this.value)">
+                            </div>
+                        </div>
+
+                        <div class="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-100">
+                            <div>
+                                <div class="text-sm font-semibold text-slate-700">Sterility Window</div>
+                                <div class="text-xs text-slate-500">Days before mixed vial expires</div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <input type="number" id="setSterility" class="w-16 p-2 border border-slate-300 rounded-lg bg-white text-sm text-center font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" onchange="updateState('settings', 'sterilityDays', this.value)">
+                                <span class="text-sm text-slate-500 font-medium">Days</span>
+                            </div>
+                        </div>
+
+                        <div class="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-100">
+                            <div>
+                                <div class="text-sm font-semibold text-slate-700">Pen Max Units</div>
+                                <div class="text-xs text-slate-500">Maximum dose volume capability</div>
+                            </div>
+                            <input type="number" id="setPenUnits" class="w-20 p-2 border border-slate-300 rounded-lg bg-white text-sm text-center font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" onchange="updateState('settings', 'penMaxUnits', this.value)">
+                        </div>
+
+                        <div class="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-100">
+                            <div>
+                                <div class="text-sm font-semibold text-slate-700">Allow Pooling Leftovers</div>
+                                <div class="text-xs text-slate-500">Combine old cartridge remnants</div>
+                            </div>
+                            <div class="relative inline-block w-10 align-middle select-none transition duration-200 ease-in">
+                                <input type="checkbox" id="setPooling" class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer" onchange="updateState('settings', 'poolLeftovers', this.checked)"/>
+                                <label for="setPooling" class="toggle-label block overflow-hidden h-5 rounded-full bg-gray-300 cursor-pointer"></label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="lg:col-span-7 space-y-6">
+                
+                <!-- Results Container (Hidden by default) -->
+                <div id="resultsPanel" class="hidden bg-blue-50 p-6 rounded-2xl border-2 border-blue-200 shadow-sm transition-all duration-500">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-xl font-bold text-blue-900 flex items-center gap-2">
+                            <i class="fa-solid fa-circle-check text-blue-600"></i> Calculation Results
+                        </h2>
+                        <button onclick="document.getElementById('resultsPanel').classList.add('hidden')" class="text-blue-400 hover:text-blue-600 bg-white rounded-full p-1 shadow-sm">
+                            <i class="fa-solid fa-xmark w-6 h-6 flex items-center justify-center"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4 mb-6">
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-blue-100 relative overflow-hidden">
+                            <div class="absolute -right-4 -top-4 opacity-5"><i class="fa-solid fa-droplet text-6xl"></i></div>
+                            <div class="text-sm text-blue-600 font-bold mb-1 uppercase tracking-wider">Future Reconstitution</div>
+                            <div class="text-3xl font-black text-slate-800" id="resOptimalBac">-- ml</div>
+                            <div class="text-xs text-slate-500 mt-2 font-medium" id="resOptimalReason">Calculated optimal BAC amount.</div>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-blue-100 relative overflow-hidden">
+                            <div class="absolute -right-4 -top-4 opacity-5"><i class="fa-solid fa-percent text-6xl"></i></div>
+                            <div class="text-sm text-blue-600 font-bold mb-1 uppercase tracking-wider">Concentration</div>
+                            <div class="text-3xl font-black text-slate-800" id="resConcentration">-- mg/ml</div>
+                            <div class="text-xs text-slate-500 mt-2 font-medium" id="resUnitMath">1 unit = -- mg</div>
+                        </div>
+                    </div>
+
+                    <div id="resWarning" class="hidden bg-red-50 border-l-4 border-red-500 p-4 mb-6 text-red-700 rounded-r-lg">
+                        <div class="flex items-start gap-3">
+                            <i class="fa-solid fa-triangle-exclamation mt-1"></i>
+                            <div>
+                                <p class="font-bold">Inventory Depletion Warning</p>
+                                <p class="text-sm" id="resWarningText">You will run out of supplies before finishing.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                        <div class="px-5 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+                            <h3 class="font-bold text-slate-800">Action Plan & Log</h3>
+                            <span class="text-xs font-semibold text-slate-500 bg-white px-2 py-1 rounded border border-slate-200">Scrollable</span>
+                        </div>
+                        <div class="p-2 space-y-2 max-h-[400px] overflow-y-auto custom-scrollbar" id="resLog">
+                            <!-- Log items injected via JS -->
+                        </div>
+                    </div>
+
+                    <div class="mt-6 p-5 bg-white rounded-xl border border-blue-100">
+                        <div class="text-sm font-bold text-slate-700 mb-3 border-b border-slate-100 pb-2">Unopened Inventory Remaining After Schedule:</div>
+                        <div class="grid grid-cols-3 gap-4 text-center">
+                            <div class="bg-slate-50 p-2 rounded-lg border border-slate-100">
+                                <div class="text-xl font-black text-slate-800" id="resLeftMed">0</div>
+                                <div class="text-xs font-medium text-slate-500">Med Vials</div>
+                            </div>
+                            <div class="bg-slate-50 p-2 rounded-lg border border-slate-100">
+                                <div class="text-xl font-black text-slate-800" id="resLeftBac">0</div>
+                                <div class="text-xs font-medium text-slate-500">BAC Bottles</div>
+                            </div>
+                            <div class="bg-slate-50 p-2 rounded-lg border border-slate-100">
+                                <div class="text-xl font-black text-slate-800" id="resLeftCart">0</div>
+                                <div class="text-xs font-medium text-slate-500">Cartridges</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Schedule Editor Card -->
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                    <div class="flex items-center justify-between mb-5 border-b border-slate-100 pb-3">
+                        <h2 class="text-lg font-bold flex items-center gap-2 text-slate-800">
+                            <i class="fa-regular fa-calendar-check text-amber-500"></i> Dosing Schedule & Tracker
+                        </h2>
+                        <button onclick="addScheduleRow()" class="text-sm font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg transition">
+                            <i class="fa-solid fa-plus mr-1"></i> Add Week
+                        </button>
+                    </div>
+                    
+                    <div class="flex items-center gap-4 text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 px-2 hidden sm:flex">
+                        <div class="w-8">Done</div>
+                        <div class="flex-1">Date</div>
+                        <div class="w-24 text-right pr-4">Dose (mg)</div>
+                        <div class="flex-1">Site</div>
+                        <div class="w-8"></div>
+                    </div>
+
+                    <div class="space-y-2" id="scheduleContainer">
+                        <!-- Schedule rows injected via JS -->
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Pre-configured State based on User Instructions (Sep 22 start, 9 unopened, 40-day sterility)
+        window.appState = {
+            medication: { mg: 5, vials: 9 }, // 9 unopened
+            agent: { ml: 30, vials: 9 }, // 9 unopened
+            hardware: { cartridgeSize: 3, cartridgeCount: 9 }, // 9 unopened
+            settings: { penMaxUnits: 60, sterilityDays: 40, poolLeftovers: true, bacOverride: '' },
+            activeVial: { active: true, dateMixed: '2026-09-22', mgTotal: 5, bacMl: 2 },
+            schedule: [
+                { id: '1', date: '2026-09-22', dose: 0.5, taken: true, site: 'Right Stomach' },
+                { id: '2', date: '2026-09-29', dose: 1.0, taken: true, site: 'Left Stomach' },
+                { id: '3', date: '2026-10-06', dose: 1.0, taken: false, site: '' },
+                { id: '4', date: '2026-10-13', dose: 1.0, taken: false, site: '' },
+                { id: '5', date: '2026-10-20', dose: 1.0, taken: false, site: '' },
+                { id: '6', date: '2026-10-27', dose: 1.0, taken: false, site: '' },
+                { id: '7', date: '2026-11-03', dose: 1.0, taken: false, site: '' },
+                { id: '8', date: '2026-11-10', dose: 2.0, taken: false, site: '' },
+                { id: '9', date: '2026-11-17', dose: 2.0, taken: false, site: '' },
+                { id: '10', date: '2026-11-24', dose: 2.0, taken: false, site: '' },
+                { id: '11', date: '2026-12-01', dose: 2.0, taken: false, site: '' },
+                { id: '12', date: '2026-12-08', dose: 2.0, taken: false, site: '' },
+                { id: '13', date: '2026-12-15', dose: 2.0, taken: false, site: '' },
+                { id: '14', date: '2026-12-22', dose: 2.0, taken: false, site: '' },
+                { id: '15', date: '2026-12-29', dose: 2.0, taken: false, site: '' },
+                { id: '16', date: '2027-01-05', dose: 3.0, taken: false, site: '' },
+            ]
+        };
+
+        const SITES = ['Left Stomach', 'Right Stomach', 'Left Thigh', 'Right Thigh', 'Left Arm', 'Right Arm', 'Other'];
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        
+        let db, auth, user, saveTimeout;
+
+        if (Object.keys(firebaseConfig).length > 0) {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            initAuth();
+        } else {
+            document.getElementById('loadingScreen').classList.add('hidden');
+            document.getElementById('appContent').classList.remove('hidden');
+            loadLocalState();
+            renderUI();
+        }
+
+        async function initAuth() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Auth error:", error);
+                document.getElementById('loadingScreen').classList.add('hidden');
+                document.getElementById('appContent').classList.remove('hidden');
+                renderUI();
+            }
+
+            onAuthStateChanged(auth, (currentUser) => {
+                if (currentUser) {
+                    user = currentUser;
+                    loadCloudState();
+                }
+            });
+        }
+
+        function loadCloudState() {
+            const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'data', 'trackerState');
+            onSnapshot(docRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    window.appState = { ...window.appState, ...docSnap.data() };
+                }
+                document.getElementById('loadingScreen').classList.add('hidden');
+                document.getElementById('appContent').classList.remove('hidden');
+                renderUI();
+            }, (error) => {
+                console.error("Error syncing data:", error);
+                document.getElementById('loadingScreen').classList.add('hidden');
+                document.getElementById('appContent').classList.remove('hidden');
+                renderUI();
+            });
+        }
+
+        window.saveState = async function() {
+            const saveIndicator = document.getElementById('saveStatus');
+            saveIndicator.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+            saveIndicator.classList.replace('text-emerald-600', 'text-amber-500');
+            saveIndicator.classList.replace('bg-emerald-50', 'bg-amber-50');
+
+            if (user && db) {
+                const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'data', 'trackerState');
+                try {
+                    await setDoc(docRef, window.appState, { merge: true });
+                } catch (e) { console.error("Save error:", e); }
+            } else {
+                localStorage.setItem('peptideTrackerData', JSON.stringify(window.appState));
+            }
+            
+            setTimeout(() => {
+                saveIndicator.innerHTML = '<i class="fa-solid fa-cloud-check"></i> Saved';
+                saveIndicator.classList.replace('text-amber-500', 'text-emerald-600');
+                saveIndicator.classList.replace('bg-amber-50', 'bg-emerald-50');
+            }, 500);
+        }
+
+        function loadLocalState() {
+            const localData = localStorage.getItem('peptideTrackerData');
+            if (localData) window.appState = JSON.parse(localData);
+        }
+
+        window.updateState = function(category, field, value) {
+            let parsedVal = (field === 'active' || field === 'poolLeftovers' || field === 'bacOverride') ? value : parseFloat(value);
+            if (field === 'bacOverride' && value !== '') parsedVal = parseFloat(value);
+            
+            if (isNaN(parsedVal) && typeof value !== 'boolean' && typeof value !== 'string' && value !== '') return;
+            if (field === 'dateMixed') parsedVal = value;
+
+            if (category === 'medication' || category === 'agent' || category === 'hardware' || category === 'settings' || category === 'activeVial') {
+                window.appState[category][field] = parsedVal;
+            }
+            
+            if (category === 'activeVial' && field === 'active') {
+                const form = document.getElementById('activeVialForm');
+                if(value) { form.style.opacity = 1; form.style.height = 'auto'; form.style.pointerEvents = 'auto'; } 
+                else { form.style.opacity = 0; form.style.height = '0px'; form.style.pointerEvents = 'none'; }
+            }
+
+            if (category === 'activeVial' || category === 'schedule') {
+                updateComputedRemaining();
+            }
+
+            clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(saveState, 1000);
+        }
+
+        function updateComputedRemaining() {
+            if (!appState.activeVial.active) {
+                document.getElementById('computedRemaining').innerText = "-- mg";
+                return;
+            }
+            const totalTaken = appState.schedule.filter(s => s.taken).reduce((sum, s) => sum + s.dose, 0);
+            const remaining = Math.max(0, appState.activeVial.mgTotal - totalTaken);
+            document.getElementById('computedRemaining').innerText = `${remaining.toFixed(2)} mg`;
+        }
+
+        function updateCountdown() {
+            const today = new Date();
+            today.setHours(0,0,0,0);
+            
+            const nextDose = appState.schedule.find(s => !s.taken);
+            const cdWidget = document.getElementById('countdownWidget');
+            
+            if (!nextDose) {
+                cdWidget.classList.add('hidden');
+                return;
+            }
+            
+            cdWidget.classList.remove('hidden');
+            const targetDate = new Date(nextDose.date);
+            // Adjust for timezone differences when parsing YYYY-MM-DD
+            targetDate.setMinutes(targetDate.getMinutes() + targetDate.getTimezoneOffset());
+            targetDate.setHours(0,0,0,0);
+
+            const diffTime = targetDate - today;
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+            const statusEl = document.getElementById('cdStatus');
+            document.getElementById('cdDate').innerText = nextDose.date;
+            document.getElementById('cdDose').innerText = nextDose.dose.toFixed(1);
+
+            if (diffDays === 0) {
+                statusEl.innerText = "Due Today!";
+                statusEl.className = "text-2xl font-black tracking-tight mt-0.5 text-amber-300";
+            } else if (diffDays < 0) {
+                statusEl.innerText = `Overdue by ${Math.abs(diffDays)} Days`;
+                statusEl.className = "text-2xl font-black tracking-tight mt-0.5 text-red-300";
+            } else {
+                statusEl.innerText = `Due in ${diffDays} Days`;
+                statusEl.className = "text-2xl font-black tracking-tight mt-0.5 text-blue-100";
+            }
+        }
+
+        function renderUI() {
+            // Inventory
+            document.getElementById('medMg').value = appState.medication.mg;
+            document.getElementById('medVials').value = appState.medication.vials;
+            document.getElementById('bacMl').value = appState.agent.ml;
+            document.getElementById('bacVials').value = appState.agent.vials;
+            document.getElementById('cartSize').value = appState.hardware.cartridgeSize;
+            document.getElementById('cartCount').value = appState.hardware.cartridgeCount;
+            
+            // Settings
+            document.getElementById('setPenUnits').value = appState.settings.penMaxUnits;
+            document.getElementById('setSterility').value = appState.settings.sterilityDays;
+            document.getElementById('setPooling').checked = appState.settings.poolLeftovers;
+            document.getElementById('setBacOverride').value = appState.settings.bacOverride || '';
+
+            // Active Vial
+            document.getElementById('activeVialToggle').checked = appState.activeVial.active;
+            document.getElementById('avDate').value = appState.activeVial.dateMixed;
+            document.getElementById('avMg').value = appState.activeVial.mgTotal;
+            document.getElementById('avBac').value = appState.activeVial.bacMl;
+            
+            const avForm = document.getElementById('activeVialForm');
+            if(appState.activeVial.active) { avForm.style.opacity = 1; avForm.style.height = 'auto'; avForm.style.pointerEvents = 'auto'; } 
+            else { avForm.style.opacity = 0; avForm.style.height = '0px'; avForm.style.pointerEvents = 'none'; }
+
+            updateComputedRemaining();
+            renderSchedule();
+            updateCountdown();
+        }
+
+        function renderSchedule() {
+            const container = document.getElementById('scheduleContainer');
+            container.innerHTML = '';
+            
+            appState.schedule.forEach((week, index) => {
+                const siteOptions = SITES.map(s => `<option value="${s}" ${week.site === s ? 'selected' : ''}>${s}</option>`).join('');
+                const isTaken = week.taken;
+                const rowClass = isTaken ? 'taken-row' : 'bg-white hover:border-blue-300';
+                const textClass = isTaken ? 'text-slate-500 font-medium' : 'text-slate-800 font-bold';
+
+                const row = document.createElement('div');
+                row.className = `flex flex-col sm:flex-row items-center gap-3 p-3 rounded-xl border border-slate-200 transition ${rowClass}`;
+                row.innerHTML = `
+                    <div class="flex items-center gap-3 w-full sm:w-auto">
+                        <div class="w-8 flex justify-center">
+                            <input type="checkbox" ${isTaken ? 'checked' : ''} onchange="updateSchedule(${index}, 'taken', this.checked)" class="w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 cursor-pointer">
+                        </div>
+                        <div class="w-10 text-center text-[10px] font-black text-slate-400 uppercase tracking-wider hidden sm:block">W${index + 1}</div>
+                    </div>
+                    
+                    <div class="flex-1 w-full flex items-center gap-3">
+                        <div class="relative flex-1">
+                            <input type="date" value="${week.date}" ${isTaken ? 'disabled' : ''} onchange="updateSchedule(${index}, 'date', this.value)" class="w-full p-2.5 border border-slate-300 rounded-lg bg-transparent text-sm ${textClass} outline-none transition disabled:bg-transparent disabled:border-transparent disabled:cursor-not-allowed">
+                        </div>
+                        <div class="relative w-24">
+                            <input type="number" step="0.1" value="${week.dose}" ${isTaken ? 'disabled' : ''} onchange="updateSchedule(${index}, 'dose', this.value)" class="w-full p-2.5 border border-slate-300 rounded-lg bg-transparent text-sm ${textClass} text-right outline-none transition disabled:bg-transparent disabled:border-transparent disabled:cursor-not-allowed">
+                        </div>
+                        <div class="relative flex-1">
+                            <select onchange="updateSchedule(${index}, 'site', this.value)" class="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-sm text-slate-600 outline-none focus:ring-2 focus:ring-blue-500 transition">
+                                <option value="" disabled selected>Select Site...</option>
+                                ${siteOptions}
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <button onclick="removeScheduleRow(${index})" class="p-2.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors w-full sm:w-auto flex justify-center">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
+                `;
+                container.appendChild(row);
+            });
+        }
+
+        window.updateSchedule = function(index, field, value) {
+            appState.schedule[index][field] = field === 'dose' ? parseFloat(value) : value;
+            
+            updateComputedRemaining();
+            updateCountdown();
+            
+            clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(saveState, 1000);
+            renderSchedule(); // Re-render to apply lock/unlock styling
+        }
+
+        window.addScheduleRow = function() {
+            const lastWeek = appState.schedule[appState.schedule.length - 1];
+            let newDate = new Date().toISOString().split('T')[0];
+            if (lastWeek) {
+                const d = new Date(lastWeek.date);
+                d.setDate(d.getDate() + 7);
+                newDate = d.toISOString().split('T')[0];
+            }
+            const newDose = lastWeek ? lastWeek.dose : 0.5;
+            
+            appState.schedule.push({
+                id: Math.random().toString(36).substr(2, 9),
+                date: newDate,
+                dose: newDose,
+                taken: false,
+                site: ''
+            });
+            renderSchedule();
+            updateCountdown();
+            saveState();
+        }
+
+        window.removeScheduleRow = function(index) {
+            appState.schedule.splice(index, 1);
+            renderSchedule();
+            updateComputedRemaining();
+            updateCountdown();
+            saveState();
+        }
+
+        const calculateDaysBetween = (date1, date2) => {
+            const d1 = new Date(date1);
+            const d2 = new Date(date2);
+            return Math.ceil(Math.abs(d2 - d1) / (1000 * 60 * 60 * 24));
+        };
+
+        window.runCalculations = function() {
+            if (appState.schedule.length === 0) return;
+
+            // Execution state variables initialized from Unopened Inventory
+            let sim = {
+                medVials: appState.medication.vials,
+                bacVials: appState.agent.vials,
+                cartridges: appState.hardware.cartridgeCount,
+                activeMedVial: null,
+                activeBacVial: null
+            };
+
+            // Initialize Active Vial if toggled on
+            if (appState.activeVial.active) {
+                const totalTakenBeforeSim = 0; // We calculate remaining dynamically per step
+                sim.activeMedVial = {
+                    dateMixed: appState.activeVial.dateMixed,
+                    mgRemaining: appState.activeVial.mgTotal,
+                    concentration: appState.activeVial.mgTotal / appState.activeVial.bacMl
+                };
+                // Assume 1 BAC bottle was opened for this
+                sim.activeBacVial = {
+                    dateOpened: appState.activeVial.dateMixed,
+                    mlRemaining: appState.agent.ml - appState.activeVial.bacMl
+                };
+            }
+
+            // 1. Determine Future Reconstitution Ratio
+            let futureBacMl = parseFloat(appState.settings.bacOverride);
+            let isOverride = true;
+
+            if (isNaN(futureBacMl) || futureBacMl <= 0) {
+                isOverride = false;
+                // Auto Calculate based on FUTURE un-taken doses
+                let maxFutureDose = Math.max(...appState.schedule.filter(s => !s.taken).map(s => s.dose), 0.1);
+                const penMaxVolMl = appState.settings.penMaxUnits / 100;
+                const reqConcentration = maxFutureDose / penMaxVolMl; 
+                
+                futureBacMl = appState.medication.mg / reqConcentration;
+                if (futureBacMl > appState.hardware.cartridgeSize) futureBacMl = appState.hardware.cartridgeSize;
+                futureBacMl = Math.floor(futureBacMl * 10) / 10; // Round 1 decimal
+                if (futureBacMl <= 0) futureBacMl = 1;
+            }
+            
+            const futureConcentration = appState.medication.mg / futureBacMl;
+            
+            const log = [];
+            let outOfStock = false;
+            let runOutDate = null;
+
+            // 2. Simulate Schedule execution
+            for (let i = 0; i < appState.schedule.length; i++) {
+                const week = appState.schedule[i];
+                let doseRemaining = week.dose;
+                const weekLog = { date: week.date, targetDose: doseRemaining, isTaken: week.taken, site: week.site, actions: [], unitsDialed: [] };
+
+                const openNewVial = (currentDate) => {
+                    if (sim.medVials <= 0 || sim.cartridges <= 0) return false;
+                    
+                    // Check BAC expiry
+                    if (sim.activeBacVial && calculateDaysBetween(sim.activeBacVial.dateOpened, currentDate) > appState.settings.sterilityDays) {
+                        sim.bacVials -= 1;
+                        weekLog.actions.push({ text: `BAC expired. Opened new ${appState.agent.ml}ml bottle.`, type: 'info' });
+                        sim.activeBacVial = { mlRemaining: appState.agent.ml, dateOpened: currentDate };
+                    }
+
+                    if (!sim.activeBacVial || sim.activeBacVial.mlRemaining < futureBacMl) {
+                        if (sim.bacVials > 0) {
+                            sim.bacVials -= 1;
+                            weekLog.actions.push({ text: `Opened new ${appState.agent.ml}ml BAC bottle.`, type: 'info' });
+                            sim.activeBacVial = { mlRemaining: appState.agent.ml, dateOpened: currentDate };
+                        } else { return false; }
+                    }
+
+                    // Deduct unopened inventory
+                    sim.medVials -= 1;
+                    sim.cartridges -= 1;
+                    sim.activeBacVial.mlRemaining -= futureBacMl;
+                    
+                    sim.activeMedVial = {
+                        mgRemaining: appState.medication.mg,
+                        concentration: futureConcentration,
+                        dateMixed: currentDate
+                    };
+                    
+                    weekLog.actions.push({ text: `Reconstituted new ${appState.medication.mg}mg vial with ${futureBacMl}ml of BAC.`, type: 'mix' });
+                    weekLog.actions.push({ text: `Loaded new cartridge into pen.`, type: 'info' });
+                    return true;
+                };
+
+                // Check Active Vial Expiry
+                if (sim.activeMedVial) {
+                    const daysOld = calculateDaysBetween(sim.activeMedVial.dateMixed, week.date);
+                    if (daysOld > appState.settings.sterilityDays) {
+                        weekLog.actions.push({ text: `Discarded active vial (Expired after ${daysOld} days). Waste: ${sim.activeMedVial.mgRemaining.toFixed(2)}mg.`, type: 'warn' });
+                        sim.activeMedVial = null;
+                    }
+                }
+
+                // Execute Dosing Loop
+                while (doseRemaining > 0.001 && !outOfStock) {
+                    if (!sim.activeMedVial) {
+                        if (!openNewVial(week.date)) {
+                            outOfStock = true;
+                            runOutDate = week.date;
+                            weekLog.actions.push({ text: `OUT OF STOCK. Cannot complete dose.`, type: 'error' });
+                            break;
+                        }
+                    }
+
+                    if (sim.activeMedVial.mgRemaining >= doseRemaining) {
+                        // Standard Injection
+                        const volumeMl = doseRemaining / sim.activeMedVial.concentration;
+                        const units = Math.round(volumeMl * 100);
+                        weekLog.unitsDialed.push(units);
+                        
+                        let siteText = week.site ? ` into ${week.site}` : '';
+                        let prefix = week.taken ? `✅ (Taken) Injected` : `Injected`;
+                        let type = week.taken ? 'taken' : 'inject';
+                        
+                        weekLog.actions.push({ text: `${prefix} ${doseRemaining.toFixed(2)}mg (${units} units)${siteText}.`, type: type });
+                        sim.activeMedVial.mgRemaining -= doseRemaining;
+                        doseRemaining = 0;
+                    } else {
+                        // Insufficient medication in current vial
+                        const availableMg = sim.activeMedVial.mgRemaining;
+                        
+                        if (appState.settings.poolLeftovers && availableMg > 0) {
+                            const volumeMl = availableMg / sim.activeMedVial.concentration;
+                            const units = Math.round(volumeMl * 100);
+                            weekLog.unitsDialed.push(units);
+                            
+                            let siteText = week.site ? ` into ${week.site}` : '';
+                            let prefix = week.taken ? `✅ (Taken) Injected` : `Injected`;
+                            let type = week.taken ? 'taken' : 'inject';
+
+                            weekLog.actions.push({ text: `${prefix} remaining ${availableMg.toFixed(2)}mg (${units} units)${siteText} from current cartridge.`, type: type });
+                            doseRemaining -= availableMg;
+                            sim.activeMedVial = null; 
+                            weekLog.actions.push({ text: `Discarded empty cartridge.`, type: 'info' });
+                        } else {
+                            weekLog.actions.push({ text: `Discarded active vial (Insufficient dose remaining). Waste: ${availableMg.toFixed(2)}mg.`, type: 'warn' });
+                            sim.activeMedVial = null;
+                        }
+                    }
+                }
+                
+                log.push(weekLog);
+                if (outOfStock) break;
+            }
+
+            // Update UI Output
+            document.getElementById('resOptimalBac').innerText = `${futureBacMl} ml`;
+            document.getElementById('resOptimalReason').innerText = isOverride ? "Using your custom override amount." : "Auto-calculated optimal BAC amount for future un-taken doses.";
+            document.getElementById('resConcentration').innerText = `${futureConcentration.toFixed(1)} mg/ml`;
+            document.getElementById('resUnitMath').innerText = `1 unit = ${(futureConcentration / 100).toFixed(3)} mg`;
+            
+            if (outOfStock) {
+                document.getElementById('resWarning').classList.remove('hidden');
+                document.getElementById('resWarningText').innerHTML = `You will run out of supplies on or before <strong>${runOutDate}</strong>. Order more soon.`;
+            } else {
+                document.getElementById('resWarning').classList.add('hidden');
+            }
+
+            const logContainer = document.getElementById('resLog');
+            logContainer.innerHTML = '';
+            
+            log.forEach((week, idx) => {
+                let actionHtml = week.actions.map(act => {
+                    let icon = '<i class="fa-solid fa-angle-right text-slate-300"></i>';
+                    let color = 'text-slate-600';
+                    
+                    if (act.type === 'inject') { icon = '<i class="fa-solid fa-syringe text-blue-500"></i>'; color = 'text-slate-900 font-medium'; }
+                    if (act.type === 'taken') { icon = '<i class="fa-solid fa-check text-emerald-500"></i>'; color = 'text-emerald-700 font-medium'; }
+                    if (act.type === 'mix') { icon = '<i class="fa-solid fa-flask text-teal-500"></i>'; color = 'text-teal-700'; }
+                    if (act.type === 'warn') { icon = '<i class="fa-solid fa-trash-can text-amber-500"></i>'; color = 'text-amber-700'; }
+                    if (act.type === 'error') { icon = '<i class="fa-solid fa-circle-xmark text-red-500"></i>'; color = 'text-red-700 font-bold'; }
+                    
+                    return `<div class="flex items-start gap-2 text-sm mt-1">
+                        <div class="mt-0.5 shrink-0 w-4">${icon}</div>
+                        <div class="${color}">${act.text}</div>
+                    </div>`;
+                }).join('');
+
+                let unitsHtml = week.unitsDialed.map(u => {
+                    let bg = week.isTaken ? 'bg-emerald-600' : 'bg-blue-600';
+                    return `<div class="${bg} text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm mb-1 whitespace-nowrap uppercase tracking-wide">Dial: ${u}</div>`;
+                }).join('');
+
+                let cardBg = week.isTaken ? 'bg-slate-50 opacity-90 border-slate-200' : 'bg-white border-blue-100 shadow-sm';
+
+                logContainer.innerHTML += `
+                    <div class="p-4 rounded-xl border flex flex-col sm:flex-row gap-4 relative mb-3 ${cardBg}">
+                        <div class="shrink-0 w-24">
+                            <div class="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">Week ${idx + 1}</div>
+                            <div class="font-bold ${week.isTaken ? 'text-slate-500' : 'text-slate-800'}">${week.date}</div>
+                            <div class="text-sm font-black mt-1 inline-block px-2 py-0.5 rounded border ${week.isTaken ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-blue-600 bg-blue-50 border-blue-100'}">${week.targetDose} mg</div>
+                        </div>
+                        <div class="grow pt-0.5">
+                            ${actionHtml}
+                        </div>
+                        <div class="sm:absolute sm:right-4 sm:top-4 flex flex-row sm:flex-col gap-1 justify-end mt-2 sm:mt-0 flex-wrap">
+                            ${unitsHtml}
+                        </div>
+                    </div>
+                `;
+            });
+
+            document.getElementById('resLeftMed').innerText = sim.medVials;
+            document.getElementById('resLeftBac').innerText = sim.bacVials;
+            document.getElementById('resLeftCart').innerText = sim.cartridges;
+
+            // Show Panel & Scroll
+            const panel = document.getElementById('resultsPanel');
+            panel.classList.remove('hidden');
+            setTimeout(() => { panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
+        }
+    </script>
+</body>
+</html>
