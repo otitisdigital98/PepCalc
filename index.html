@@ -144,7 +144,7 @@
                     </div>
                     
                     <div id="activeVialForm" class="space-y-4 transition-all duration-300">
-                        <p class="text-xs text-slate-500 mb-2">Define your first/current mixed vial. The app will subtract your "Taken" schedule doses automatically to figure out what is left.</p>
+                        <p class="text-xs text-slate-500 mb-2">Define your first/current mixed vial. The app will subtract your "Taken" schedule doses automatically to figure out what is left. If priming left less in the cartridge than expected, enter the units actually left in that week's <strong>Cart. Left</strong> column.</p>
                         
                         <div class="bg-teal-50 border border-teal-100 p-3 rounded-lg flex items-center justify-between mb-2">
                             <span class="text-sm font-semibold text-teal-800">Medication Remaining:</span>
@@ -301,6 +301,7 @@
                         <div class="w-8">Done</div>
                         <div class="flex-1">Date</div>
                         <div class="w-24 text-right pr-4">Dose (mg)</div>
+                        <div class="w-24 text-right pr-2" title="Units actually left in the cartridge before this dose (accounts for priming waste). Leave blank for auto.">Cart. Left (u)</div>
                         <div class="flex-1">Site</div>
                         <div class="w-8"></div>
                     </div>
@@ -461,8 +462,13 @@
                 document.getElementById('computedRemaining').innerText = "-- mg";
                 return;
             }
-            const totalTaken = appState.schedule.filter(s => s.taken).reduce((sum, s) => sum + s.dose, 0);
-            const remaining = Math.max(0, appState.activeVial.mgTotal - totalTaken);
+            // Walk taken doses in order; a "cartridge left" entry resets the level to what was actually measured
+            const concentration = appState.activeVial.mgTotal / appState.activeVial.bacMl;
+            let remaining = appState.activeVial.mgTotal;
+            appState.schedule.filter(s => s.taken).forEach(s => {
+                if (isCartLeftSet(s)) remaining = (s.cartridgeLeft / 100) * concentration;
+                remaining = Math.max(0, remaining - s.dose);
+            });
             document.getElementById('computedRemaining').innerText = `${remaining.toFixed(2)} mg`;
         }
 
@@ -540,6 +546,7 @@
             appState.schedule.forEach((week, index) => {
                 const siteOptions = SITES.map(s => `<option value="${s}" ${week.site === s ? 'selected' : ''}>${s}</option>`).join('');
                 const isTaken = week.taken;
+                const hasCartLeft = isCartLeftSet(week);
                 const rowClass = isTaken ? 'taken-row' : 'bg-white hover:border-blue-300';
                 const textClass = isTaken ? 'text-slate-500 font-medium' : 'text-slate-800 font-bold';
 
@@ -560,6 +567,9 @@
                         <div class="relative w-24">
                             <input type="number" step="0.1" value="${week.dose}" ${isTaken ? 'disabled' : ''} onchange="updateSchedule(${index}, 'dose', this.value)" class="w-full p-2.5 border border-slate-300 rounded-lg bg-transparent text-sm ${textClass} text-right outline-none transition disabled:bg-transparent disabled:border-transparent disabled:cursor-not-allowed">
                         </div>
+                        <div class="relative w-24">
+                            <input type="number" step="1" min="0" value="${hasCartLeft ? week.cartridgeLeft : ''}" placeholder="Auto" title="Units actually left in the cartridge before this dose (e.g. after priming waste). Leave blank to use the calculated amount." onchange="updateSchedule(${index}, 'cartridgeLeft', this.value)" class="w-full p-2.5 border ${hasCartLeft ? 'border-amber-400 bg-amber-50 text-amber-800 font-bold' : 'border-slate-300 bg-white text-slate-600'} rounded-lg text-sm text-right outline-none focus:ring-2 focus:ring-blue-500 transition">
+                        </div>
                         <div class="relative flex-1">
                             <select onchange="updateSchedule(${index}, 'site', this.value)" class="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-sm text-slate-600 outline-none focus:ring-2 focus:ring-blue-500 transition">
                                 <option value="" disabled selected>Select Site...</option>
@@ -577,7 +587,13 @@
         }
 
         window.updateSchedule = function(index, field, value) {
-            appState.schedule[index][field] = field === 'dose' ? parseFloat(value) : value;
+            let parsedVal = value;
+            if (field === 'dose') parsedVal = parseFloat(value);
+            if (field === 'cartridgeLeft') {
+                parsedVal = value === '' ? '' : parseFloat(value);
+                if (parsedVal !== '' && (isNaN(parsedVal) || parsedVal < 0)) parsedVal = '';
+            }
+            appState.schedule[index][field] = parsedVal;
             
             updateComputedRemaining();
             updateCountdown();
@@ -615,6 +631,10 @@
             updateComputedRemaining();
             updateCountdown();
             saveState();
+        }
+
+        function isCartLeftSet(week) {
+            return week.cartridgeLeft !== undefined && week.cartridgeLeft !== '' && week.cartridgeLeft !== null && !isNaN(week.cartridgeLeft);
         }
 
         const calculateDaysBetween = (date1, date2) => {
@@ -722,6 +742,19 @@
                     }
                 }
 
+                // Apply manual "cartridge left" correction (e.g. priming waste means less is left than calculated)
+                if (isCartLeftSet(week) && sim.activeMedVial) {
+                    const actualMg = (week.cartridgeLeft / 100) * sim.activeMedVial.concentration;
+                    const diffMg = sim.activeMedVial.mgRemaining - actualMg;
+                    const diffText = diffMg > 0.001 ? ` Wastage: ${diffMg.toFixed(2)}mg.` : (diffMg < -0.001 ? ` (${Math.abs(diffMg).toFixed(2)}mg more than calculated.)` : '');
+                    weekLog.actions.push({ text: `Adjusted cartridge to ${week.cartridgeLeft} units actually left (${actualMg.toFixed(2)}mg).${diffText}`, type: 'adjust' });
+                    sim.activeMedVial.mgRemaining = actualMg;
+                    if (actualMg <= 0.001) {
+                        sim.activeMedVial = null;
+                        weekLog.actions.push({ text: `Discarded empty cartridge.`, type: 'info' });
+                    }
+                }
+
                 // Execute Dosing Loop
                 while (doseRemaining > 0.001 && !outOfStock) {
                     if (!sim.activeMedVial) {
@@ -798,6 +831,7 @@
                     if (act.type === 'inject') { icon = '<i class="fa-solid fa-syringe text-blue-500"></i>'; color = 'text-slate-900 font-medium'; }
                     if (act.type === 'taken') { icon = '<i class="fa-solid fa-check text-emerald-500"></i>'; color = 'text-emerald-700 font-medium'; }
                     if (act.type === 'mix') { icon = '<i class="fa-solid fa-flask text-teal-500"></i>'; color = 'text-teal-700'; }
+                    if (act.type === 'adjust') { icon = '<i class="fa-solid fa-sliders text-amber-500"></i>'; color = 'text-amber-700'; }
                     if (act.type === 'warn') { icon = '<i class="fa-solid fa-trash-can text-amber-500"></i>'; color = 'text-amber-700'; }
                     if (act.type === 'error') { icon = '<i class="fa-solid fa-circle-xmark text-red-500"></i>'; color = 'text-red-700 font-bold'; }
                     
