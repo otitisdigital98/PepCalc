@@ -202,7 +202,7 @@
                             <p class="text-xs text-blue-700 mb-3">Leave blank to let the app auto-calculate the optimal BAC ratio for future vials.</p>
                             <div class="relative">
                                 <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-blue-400"><i class="fa-solid fa-pen-to-square"></i></div>
-                                <input type="number" step="0.1" id="setBacOverride" placeholder="Auto" class="w-full pl-9 p-2.5 border border-blue-200 rounded-lg bg-white text-sm font-black text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('settings', 'bacOverride', this.value)">
+                                <input type="number" step="1" min="1" id="setBacOverride" placeholder="Auto" class="w-full pl-9 p-2.5 border border-blue-200 rounded-lg bg-white text-sm font-black text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('settings', 'bacOverride', this.value)">
                             </div>
                         </div>
 
@@ -794,20 +794,22 @@
             let futureBacMl = parseFloat(appState.settings.bacOverride);
             let isOverride = true;
 
+            const maxFutureDose = Math.max(...appState.schedule.filter(s => !s.taken).map(s => s.dose), 0.1);
+
             if (isNaN(futureBacMl) || futureBacMl <= 0) {
                 isOverride = false;
                 // Auto Calculate based on FUTURE un-taken doses
-                let maxFutureDose = Math.max(...appState.schedule.filter(s => !s.taken).map(s => s.dose), 0.1);
                 const penMaxVolMl = appState.settings.penMaxUnits / 100;
                 const reqConcentration = maxFutureDose / penMaxVolMl; 
                 
                 futureBacMl = appState.medication.mg / reqConcentration;
                 if (futureBacMl > appState.hardware.cartridgeSize) futureBacMl = appState.hardware.cartridgeSize;
-                futureBacMl = Math.floor(futureBacMl * 10) / 10; // Round 1 decimal
-                if (futureBacMl <= 0) futureBacMl = 1;
+                // Whole ml only; rounding down keeps the largest dose within the pen's max units where possible
+                futureBacMl = Math.max(1, Math.floor(futureBacMl));
             }
             
             const futureConcentration = appState.medication.mg / futureBacMl;
+            const maxDoseUnits = Math.round(mgToUnits(maxFutureDose, futureConcentration));
             
             const log = [];
             const weeks = [];
@@ -954,16 +956,20 @@
             }
             snapshotActive();
 
-            return { log, weeks, sim, futureBacMl, isOverride, futureConcentration, outOfStock, runOutDate, activeAfterTaken };
+            return { log, weeks, sim, futureBacMl, isOverride, futureConcentration, maxFutureDose, maxDoseUnits, outOfStock, runOutDate, activeAfterTaken };
         }
 
         window.runCalculations = function() {
             if (appState.schedule.length === 0) return;
-            const { log, sim, futureBacMl, isOverride, futureConcentration, outOfStock, runOutDate } = simulate();
+            const { log, sim, futureBacMl, isOverride, futureConcentration, maxFutureDose, maxDoseUnits, outOfStock, runOutDate } = simulate();
 
             // Update UI Output
             document.getElementById('resOptimalBac').innerText = `${futureBacMl} ml`;
-            document.getElementById('resOptimalReason').innerText = isOverride ? "Using your custom override amount." : "Auto-calculated optimal BAC amount for future un-taken doses.";
+            let reason = isOverride ? "Using your custom override amount." : "Auto-calculated in whole ml for future un-taken doses.";
+            if (maxDoseUnits > appState.settings.penMaxUnits) {
+                reason += ` Largest dose (${maxFutureDose} mg) is ${maxDoseUnits} units, above your ${appState.settings.penMaxUnits}-unit pen max, so split it into two injections.`;
+            }
+            document.getElementById('resOptimalReason').innerText = reason;
             document.getElementById('resConcentration').innerText = `${futureConcentration.toFixed(1)} mg/ml`;
             document.getElementById('resUnitMath').innerText = `1 unit = ${(futureConcentration / 100).toFixed(3)} mg`;
             
