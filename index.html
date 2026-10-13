@@ -144,11 +144,19 @@
                     </div>
                     
                     <div id="activeVialForm" class="space-y-4 transition-all duration-300">
-                        <p class="text-xs text-slate-500 mb-2">Define your first/current mixed vial. The app will subtract your "Taken" schedule doses automatically to figure out what is left. If priming left less in the cartridge than expected, enter the units actually left in that week's <strong>Units remaining</strong> box.</p>
+                        <p class="text-xs text-slate-500 mb-2">Define your current mixed vial. The app subtracts your "Taken" doses to work out what is left. Enter the units actually left after each injection in the schedule to track waste.</p>
                         
-                        <div class="bg-teal-50 border border-teal-100 p-3 rounded-lg flex items-center justify-between mb-2">
-                            <span class="text-sm font-semibold text-teal-800">Medication Remaining:</span>
-                            <span class="text-lg font-black text-teal-700" id="computedRemaining">-- mg</span>
+                        <div class="grid grid-cols-2 gap-2 mb-2">
+                            <div class="bg-teal-50 border border-teal-100 p-3 rounded-lg">
+                                <div class="text-xs font-semibold text-teal-800">Total Units at Mixing</div>
+                                <div class="text-lg font-black text-teal-700" id="avTotalUnits">-- u</div>
+                                <div class="text-[11px] font-medium text-teal-600" id="avConcentration">-- mg/ml</div>
+                            </div>
+                            <div class="bg-teal-50 border border-teal-100 p-3 rounded-lg">
+                                <div class="text-xs font-semibold text-teal-800">Medication Remaining</div>
+                                <div class="text-lg font-black text-teal-700" id="computedRemaining">-- mg</div>
+                                <div class="text-[11px] font-medium text-teal-600" id="computedRemainingUnits">-- u left</div>
+                            </div>
                         </div>
 
                         <div class="grid grid-cols-2 gap-4">
@@ -165,6 +173,19 @@
                                 <input type="number" step="0.1" id="avBac" class="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none transition" onchange="updateState('activeVial', 'bacMl', this.value)">
                             </div>
                         </div>
+
+                        <label for="avDiscard" class="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-100 cursor-pointer">
+                            <div>
+                                <div class="text-sm font-semibold text-slate-700">Discard Vial</div>
+                                <div class="text-xs text-slate-500">Archive this vial below and start a new one</div>
+                            </div>
+                            <input type="checkbox" id="avDiscard" onchange="discardActiveVial(this)" class="w-5 h-5 text-red-600 bg-gray-100 border-gray-300 rounded focus:ring-red-500 cursor-pointer">
+                        </label>
+                    </div>
+
+                    <div id="vialArchiveSection" class="hidden mt-5 pt-4 border-t border-slate-100">
+                        <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">Past Vials</div>
+                        <div class="space-y-1.5" id="vialArchiveList"></div>
                     </div>
                 </div>
 
@@ -423,6 +444,19 @@
             if (localData) window.appState = JSON.parse(localData);
         }
 
+        // Fill in fields added in later versions so older saved data keeps working
+        function normalizeState() {
+            if (!Array.isArray(appState.vialArchive)) appState.vialArchive = [];
+            // Old "units left before this dose" entries become "units left after the previous injection"
+            appState.schedule.forEach((week, i) => {
+                if (isNumberSet(week.cartridgeLeft)) {
+                    const prev = appState.schedule[i - 1];
+                    if (prev && !isNumberSet(prev.actualLeft)) prev.actualLeft = week.cartridgeLeft;
+                    week.cartridgeLeft = '';
+                }
+            });
+        }
+
         window.updateState = function(category, field, value) {
             let parsedVal = (field === 'active' || field === 'poolLeftovers' || field === 'bacOverride') ? value : parseFloat(value);
             if (field === 'bacOverride' && value !== '') parsedVal = parseFloat(value);
@@ -440,27 +474,87 @@
                 else { form.style.opacity = 0; form.style.height = '0px'; form.style.pointerEvents = 'none'; }
             }
 
-            if (category === 'activeVial' || category === 'schedule') {
-                updateComputedRemaining();
-            }
+            // Any input can change the expected units, so refresh everything derived from the simulation
+            updateActiveVialStats();
+            renderSchedule();
 
             clearTimeout(saveTimeout);
             saveTimeout = setTimeout(saveState, 1000);
         }
 
-        function updateComputedRemaining() {
-            if (!appState.activeVial.active) {
+        function updateActiveVialStats() {
+            const av = appState.activeVial;
+            if (!av.active) {
                 document.getElementById('computedRemaining').innerText = "-- mg";
+                document.getElementById('computedRemainingUnits').innerText = "-- u left";
+                document.getElementById('avTotalUnits').innerText = "-- u";
+                document.getElementById('avConcentration').innerText = "-- mg/ml";
                 return;
             }
-            // Walk taken doses in order; a "cartridge left" entry resets the level to what was actually measured
-            const concentration = appState.activeVial.mgTotal / appState.activeVial.bacMl;
-            let remaining = appState.activeVial.mgTotal;
-            appState.schedule.filter(s => s.taken).forEach(s => {
-                if (isCartLeftSet(s)) remaining = (s.cartridgeLeft / 100) * concentration;
-                remaining = Math.max(0, remaining - s.dose);
+            const concentration = av.mgTotal / av.bacMl;
+            document.getElementById('avTotalUnits').innerText = `${fmtUnits(av.bacMl * 100)} u`;
+            document.getElementById('avConcentration').innerText = `${av.mgTotal} mg in ${av.bacMl} ml · ${concentration.toFixed(2)} mg/ml`;
+
+            const { activeAfterTaken } = simulate();
+            const mg = activeAfterTaken ? activeAfterTaken.mg : av.mgTotal;
+            document.getElementById('computedRemaining').innerText = `${mg.toFixed(2)} mg`;
+            document.getElementById('computedRemainingUnits').innerText = `${fmtUnits(mgToUnits(mg, concentration))} u left`;
+        }
+
+        function renderVialArchive() {
+            const section = document.getElementById('vialArchiveSection');
+            const list = document.getElementById('vialArchiveList');
+            const archive = appState.vialArchive;
+            section.classList.toggle('hidden', archive.length === 0);
+            list.innerHTML = archive.map((v, i) => {
+                const isLast = i === archive.length - 1;
+                const details = [`${v.mgTotal} mg in ${v.bacMl} ml`, `${fmtUnits(v.totalUnits)} u total`];
+                if (isNumberSet(v.unitsLeft)) details.push(`${fmtUnits(v.unitsLeft)} u left`);
+                if (v.wasteUnits > 0.05) details.push(`${fmtUnits(v.wasteUnits)} u waste`);
+                return `<div class="flex items-start justify-between gap-2 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 text-xs text-slate-400">
+                        <div>
+                            <div class="font-semibold text-slate-500">Mixed ${v.dateMixed} &rarr; Discarded ${v.dateDiscarded}</div>
+                            <div>${details.join(' · ')}</div>
+                        </div>
+                        ${isLast ? `<button onclick="restoreLastVial()" class="shrink-0 text-[11px] font-semibold text-slate-400 hover:text-blue-600 underline">Restore</button>` : ''}
+                    </div>`;
+            }).reverse().join('');
+        }
+
+        function todayStr() { return new Date().toLocaleDateString('en-CA'); } // YYYY-MM-DD in local time
+
+        window.discardActiveVial = function(checkbox) {
+            checkbox.checked = false;
+            const av = appState.activeVial;
+            if (!confirm(`Discard the vial mixed on ${av.dateMixed}? It will move to Past Vials and a new active vial will be started.`)) return;
+
+            const { activeAfterTaken } = simulate();
+            const concentration = av.mgTotal / av.bacMl;
+            const archivedIds = archivedWeekIds();
+            appState.vialArchive.push({
+                id: Math.random().toString(36).substr(2, 9),
+                dateMixed: av.dateMixed,
+                mgTotal: av.mgTotal,
+                bacMl: av.bacMl,
+                totalUnits: av.bacMl * 100,
+                dateDiscarded: todayStr(),
+                unitsLeft: activeAfterTaken ? mgToUnits(activeAfterTaken.mg, concentration) : '',
+                wasteUnits: activeAfterTaken ? mgToUnits(activeAfterTaken.wasteMg, concentration) : 0,
+                // Taken doses that came out of this vial, so the next vial doesn't count them again
+                weekIds: appState.schedule.filter(w => w.taken && !archivedIds.has(w.id) && w.date >= av.dateMixed).map(w => w.id)
             });
-            document.getElementById('computedRemaining').innerText = `${remaining.toFixed(2)} mg`;
+            appState.activeVial = { active: true, dateMixed: todayStr(), mgTotal: appState.medication.mg, bacMl: av.bacMl };
+            renderUI();
+            saveState();
+        }
+
+        window.restoreLastVial = function() {
+            const last = appState.vialArchive[appState.vialArchive.length - 1];
+            if (!last || !confirm(`Restore the vial mixed on ${last.dateMixed} as your active vial? The current active vial setup will be replaced.`)) return;
+            appState.vialArchive.pop();
+            appState.activeVial = { active: true, dateMixed: last.dateMixed, mgTotal: last.mgTotal, bacMl: last.bacMl };
+            renderUI();
+            saveState();
         }
 
         function updateCountdown() {
@@ -501,6 +595,8 @@
         }
 
         function renderUI() {
+            normalizeState();
+
             // Inventory
             document.getElementById('medMg').value = appState.medication.mg;
             document.getElementById('medVials').value = appState.medication.vials;
@@ -525,7 +621,8 @@
             if(appState.activeVial.active) { avForm.style.opacity = 1; avForm.style.height = 'auto'; avForm.style.pointerEvents = 'auto'; } 
             else { avForm.style.opacity = 0; avForm.style.height = '0px'; avForm.style.pointerEvents = 'none'; }
 
-            updateComputedRemaining();
+            updateActiveVialStats();
+            renderVialArchive();
             renderSchedule();
             updateCountdown();
         }
@@ -533,11 +630,13 @@
         function renderSchedule() {
             const container = document.getElementById('scheduleContainer');
             container.innerHTML = '';
+            const { weeks } = simulate();
             
             appState.schedule.forEach((week, index) => {
                 const siteOptions = SITES.map(s => `<option value="${s}" ${week.site === s ? 'selected' : ''}>${s}</option>`).join('');
                 const isTaken = week.taken;
-                const hasCartLeft = isCartLeftSet(week);
+                const hasActual = isNumberSet(week.actualLeft);
+                const info = weeks[index] || {};
                 const hasWeight = isNumberSet(week.weight);
                 const rowClass = isTaken ? 'taken-row' : 'bg-white hover:border-blue-300';
                 const textClass = isTaken ? 'text-slate-500 font-medium' : 'text-slate-800 font-bold';
@@ -566,11 +665,14 @@
                                 ${siteOptions}
                             </select>
                         </div>
-                        <div class="relative sm:col-span-6">
-                            <input type="number" step="1" min="0" value="${hasCartLeft ? week.cartridgeLeft : ''}" placeholder="Units remaining" title="Units actually left in the cartridge before this dose (e.g. after priming waste). Leave blank to use the calculated amount." onchange="updateSchedule(${index}, 'cartridgeLeft', this.value)" class="w-full p-2.5 ${hasCartLeft ? 'pr-20' : ''} border ${hasCartLeft ? 'border-amber-400 bg-amber-50 text-amber-800 font-bold' : 'border-slate-300 bg-white text-slate-600'} rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 transition placeholder:text-slate-400">
-                            ${hasCartLeft ? '<span class="absolute inset-y-0 right-3 flex items-center text-xs font-semibold text-amber-600 pointer-events-none">units left</span>' : ''}
+                        <div class="col-span-2 sm:col-span-4 min-h-[42px] flex flex-col justify-center px-3 py-1.5 rounded-lg border text-xs ${info.archived ? 'border-slate-100 bg-slate-50' : 'border-slate-200 bg-slate-50'}">
+                            ${expectedHtml(info)}
                         </div>
-                        <div class="relative sm:col-span-6">
+                        <div class="relative sm:col-span-4">
+                            <input type="number" step="1" min="0" value="${hasActual ? week.actualLeft : ''}" placeholder="Actual units left" title="Units actually left in the cartridge after this injection. Leave blank to use the expected amount." onchange="updateSchedule(${index}, 'actualLeft', this.value)" class="w-full p-2.5 ${hasActual ? 'pr-14' : ''} border ${hasActual ? 'border-amber-400 bg-amber-50 text-amber-800 font-bold' : 'border-slate-300 bg-white text-slate-600'} rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 transition placeholder:text-slate-400">
+                            ${hasActual ? '<span class="absolute inset-y-0 right-3 flex items-center text-xs font-semibold text-amber-600 pointer-events-none">u left</span>' : ''}
+                        </div>
+                        <div class="relative sm:col-span-4">
                             <input type="number" step="0.1" min="0" value="${hasWeight ? week.weight : ''}" placeholder="Weight (lbs)" title="Your body weight this week, in lbs." onchange="updateSchedule(${index}, 'weight', this.value)" class="w-full p-2.5 ${hasWeight ? 'pr-12' : ''} border border-slate-300 rounded-lg bg-white text-sm ${hasWeight ? 'text-slate-800 font-semibold' : 'text-slate-600'} outline-none focus:ring-2 focus:ring-blue-500 transition placeholder:text-slate-400">
                             ${hasWeight ? '<span class="absolute inset-y-0 right-3 flex items-center text-xs font-semibold text-slate-400 pointer-events-none">lbs</span>' : ''}
                         </div>
@@ -587,13 +689,13 @@
         window.updateSchedule = function(index, field, value) {
             let parsedVal = value;
             if (field === 'dose') parsedVal = parseFloat(value);
-            if (field === 'cartridgeLeft' || field === 'weight') {
+            if (field === 'actualLeft' || field === 'weight') {
                 parsedVal = value === '' ? '' : parseFloat(value);
                 if (parsedVal !== '' && (isNaN(parsedVal) || parsedVal < 0)) parsedVal = '';
             }
             appState.schedule[index][field] = parsedVal;
             
-            updateComputedRemaining();
+            updateActiveVialStats();
             updateCountdown();
             
             clearTimeout(saveTimeout);
@@ -626,7 +728,7 @@
         window.removeScheduleRow = function(index) {
             appState.schedule.splice(index, 1);
             renderSchedule();
-            updateComputedRemaining();
+            updateActiveVialStats();
             updateCountdown();
             saveState();
         }
@@ -635,19 +737,34 @@
             return val !== undefined && val !== '' && val !== null && !isNaN(val);
         }
 
-        function isCartLeftSet(week) {
-            return isNumberSet(week.cartridgeLeft);
+        function mgToUnits(mg, concentration) { return (mg / concentration) * 100; }
+        function fmtUnits(u) { return String(Math.round(u * 10) / 10); }
+
+        function archivedWeekIds() {
+            return new Set(appState.vialArchive.flatMap(v => v.weekIds || []));
         }
 
-        const calculateDaysBetween = (date1, date2) => {
+        function expectedHtml(info) {
+            if (info.archived) return '<span class="text-slate-400">From a past vial</span>';
+            if (info.expectedLeftUnits === undefined) return '<span class="text-slate-400">Expected left: --</span>';
+            let html = `<div><span class="text-slate-500">Expected left</span> <span class="font-bold text-slate-700">${fmtUnits(info.expectedLeftUnits)} u</span></div>`;
+            if (info.wasteUnits !== undefined) {
+                if (info.wasteUnits > 0.05) html += `<div class="font-bold text-amber-700">Waste: ${fmtUnits(info.wasteUnits)} u (${info.wasteMg.toFixed(2)} mg)</div>`;
+                else if (info.wasteUnits < -0.05) html += `<div class="font-semibold text-emerald-700">${fmtUnits(-info.wasteUnits)} u more than expected</div>`;
+                else html += `<div class="font-semibold text-emerald-700">No waste</div>`;
+            }
+            return html;
+        }
+
+        function calculateDaysBetween(date1, date2) {
             const d1 = new Date(date1);
             const d2 = new Date(date2);
             return Math.ceil(Math.abs(d2 - d1) / (1000 * 60 * 60 * 24));
-        };
+        }
 
-        window.runCalculations = function() {
-            if (appState.schedule.length === 0) return;
-
+        // Walks the whole schedule: past (taken) doses against the active vial, then projects future vials.
+        // Returns the action log plus per-week expected/actual units used by the schedule and results views.
+        function simulate() {
             // Execution state variables initialized from Unopened Inventory
             let sim = {
                 medVials: appState.medication.vials,
@@ -658,12 +775,13 @@
             };
 
             // Initialize Active Vial if toggled on
+            let initialVial = null;
             if (appState.activeVial.active) {
-                const totalTakenBeforeSim = 0; // We calculate remaining dynamically per step
-                sim.activeMedVial = {
+                sim.activeMedVial = initialVial = {
                     dateMixed: appState.activeVial.dateMixed,
                     mgRemaining: appState.activeVial.mgTotal,
-                    concentration: appState.activeVial.mgTotal / appState.activeVial.bacMl
+                    concentration: appState.activeVial.mgTotal / appState.activeVial.bacMl,
+                    wasteMg: 0
                 };
                 // Assume 1 BAC bottle was opened for this
                 sim.activeBacVial = {
@@ -692,14 +810,33 @@
             const futureConcentration = appState.medication.mg / futureBacMl;
             
             const log = [];
+            const weeks = [];
             let outOfStock = false;
             let runOutDate = null;
+            let activeAfterTaken = null;
+            const archivedIds = archivedWeekIds();
+            const snapshotActive = () => {
+                if (!initialVial || activeAfterTaken) return;
+                const gone = sim.activeMedVial !== initialVial;
+                activeAfterTaken = { mg: gone ? 0 : initialVial.mgRemaining, wasteMg: initialVial.wasteMg };
+            };
 
             // 2. Simulate Schedule execution
             for (let i = 0; i < appState.schedule.length; i++) {
                 const week = appState.schedule[i];
                 let doseRemaining = week.dose;
                 const weekLog = { date: week.date, targetDose: doseRemaining, isTaken: week.taken, site: week.site, actions: [], unitsDialed: [] };
+                const info = {};
+                weeks.push(info);
+
+                // Taken doses that belong to an archived vial (or predate the active vial) don't touch the active vial
+                if (week.taken && (archivedIds.has(week.id) || (initialVial && week.date < initialVial.dateMixed))) {
+                    info.archived = true;
+                    weekLog.actions.push({ text: `✅ (Taken) Dose came from a past vial.`, type: 'taken' });
+                    log.push(weekLog);
+                    continue;
+                }
+                if (!week.taken) snapshotActive();
 
                 const openNewVial = (currentDate) => {
                     if (sim.medVials <= 0 || sim.cartridges <= 0) return false;
@@ -741,19 +878,6 @@
                     if (daysOld > appState.settings.sterilityDays) {
                         weekLog.actions.push({ text: `Discarded active vial (Expired after ${daysOld} days). Waste: ${sim.activeMedVial.mgRemaining.toFixed(2)}mg.`, type: 'warn' });
                         sim.activeMedVial = null;
-                    }
-                }
-
-                // Apply manual "cartridge left" correction (e.g. priming waste means less is left than calculated)
-                if (isCartLeftSet(week) && sim.activeMedVial) {
-                    const actualMg = (week.cartridgeLeft / 100) * sim.activeMedVial.concentration;
-                    const diffMg = sim.activeMedVial.mgRemaining - actualMg;
-                    const diffText = diffMg > 0.001 ? ` Wastage: ${diffMg.toFixed(2)}mg.` : (diffMg < -0.001 ? ` (${Math.abs(diffMg).toFixed(2)}mg more than calculated.)` : '');
-                    weekLog.actions.push({ text: `Adjusted cartridge to ${week.cartridgeLeft} units actually left (${actualMg.toFixed(2)}mg).${diffText}`, type: 'adjust' });
-                    sim.activeMedVial.mgRemaining = actualMg;
-                    if (actualMg <= 0.001) {
-                        sim.activeMedVial = null;
-                        weekLog.actions.push({ text: `Discarded empty cartridge.`, type: 'info' });
                     }
                 }
 
@@ -804,10 +928,38 @@
                         }
                     }
                 }
+
+                // Expected vs actual units left in the current vial after this injection
+                if (!outOfStock && sim.activeMedVial) {
+                    const vial = sim.activeMedVial;
+                    info.expectedLeftUnits = mgToUnits(vial.mgRemaining, vial.concentration);
+                    if (isNumberSet(week.actualLeft)) {
+                        const actualMg = (week.actualLeft / 100) * vial.concentration;
+                        info.wasteMg = vial.mgRemaining - actualMg;
+                        info.wasteUnits = info.expectedLeftUnits - week.actualLeft;
+                        const diffText = info.wasteUnits > 0.05 ? ` Waste: ${fmtUnits(info.wasteUnits)} units (${info.wasteMg.toFixed(2)}mg).`
+                            : (info.wasteUnits < -0.05 ? ` (${fmtUnits(-info.wasteUnits)} units more than expected.)` : '');
+                        weekLog.actions.push({ text: `Actual left after injection: ${week.actualLeft} units (expected ${fmtUnits(info.expectedLeftUnits)}).${diffText}`, type: 'adjust' });
+                        if (vial.wasteMg !== undefined) vial.wasteMg += Math.max(0, info.wasteMg);
+                        vial.mgRemaining = actualMg;
+                        if (actualMg <= 0.001) {
+                            sim.activeMedVial = null;
+                            weekLog.actions.push({ text: `Discarded empty cartridge.`, type: 'info' });
+                        }
+                    }
+                }
                 
                 log.push(weekLog);
                 if (outOfStock) break;
             }
+            snapshotActive();
+
+            return { log, weeks, sim, futureBacMl, isOverride, futureConcentration, outOfStock, runOutDate, activeAfterTaken };
+        }
+
+        window.runCalculations = function() {
+            if (appState.schedule.length === 0) return;
+            const { log, sim, futureBacMl, isOverride, futureConcentration, outOfStock, runOutDate } = simulate();
 
             // Update UI Output
             document.getElementById('resOptimalBac').innerText = `${futureBacMl} ml`;
